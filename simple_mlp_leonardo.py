@@ -47,13 +47,9 @@ alpha=1
 
 # VMC wavefunction and sampler
 model_p = LogNeuralBackflow(hilbert=hi, hidden_units=hidden_units, n_layers=n_layers)
-sampler_p = nk.sampler.ExactSampler(hilbert=hi)
+# sampler_p = nk.sampler.ExactSampler(hilbert=hi)
+sampler_p = nk.sampler.MetropolisExchange(hilbert=system.hilbert_space, graph=system.graph)
 psi = nk.vqs.MCState(sampler=sampler_p, model=model_p, n_samples=n_samples, seed=seed, sampler_seed=sampler_seed)
-
-# NIS distribution and sampler
-model_q = nk.models.RBM(alpha=alpha, param_dtype=jnp.float64)
-sampler_q = nk.sampler.ExactSampler(hilbert=hi, machine_pow=1)
-q = nk.vqs.MCState(sampler=sampler_q, model=model_q, n_samples=n_samples, seed=seed, sampler_seed=sampler_seed)
 
 alpha=2
 model_q = nk.models.RBM(alpha=alpha, param_dtype=jnp.float64)
@@ -67,16 +63,6 @@ sampler_seed = 0
 hidden_units = 32
 n_layers = 2
 alpha=1
-
-# VMC wavefunction and sampler
-model_p = LogNeuralBackflow(hilbert=hi, hidden_units=hidden_units, n_layers=n_layers)
-sampler_p = nk.sampler.ExactSampler(hilbert=hi)
-psi = nk.vqs.MCState(sampler=sampler_p, model=model_p, n_samples=n_samples, seed=seed, sampler_seed=sampler_seed)
-
-# NIS distribution and sampler
-model_q = nk.models.RBM(alpha=alpha, param_dtype=jnp.float64)
-sampler_q = nk.sampler.ExactSampler(hilbert=hi, machine_pow=1)
-q = nk.vqs.MCState(sampler=sampler_q, model=model_q, n_samples=n_samples, seed=seed, sampler_seed=sampler_seed)
 
 # VMC-NIS iterations
 n_iter_vmc = 10
