@@ -24,13 +24,13 @@ from pyscf import ci
 
 # create system and state
 # LiH molecule
-out_dir = './out_test/mlp'
+out_dir = '/leonardo_work/EUHPC_A05_006/NeurIS/qchem_utils/out_test/mlp'
 cid = 62714
 
 out_path = os.path.join(out_dir, str(cid))
 os.makedirs(out_path, exist_ok=True)
-mol, mo_coeff, mf = PCMolecule.molecule_cached(cid=62714, 
-                                               dir='./qchem_utils/pubchem_cache', 
+mol, mo_coeff, mf = PCMolecule.molecule_cached(cid=cid, 
+                                               dir='/leonardo_work/EUHPC_A05_006/NeurIS/qchem_utils/pubchem_cache', 
                                                basis="STO-3G")#62714)
 system = PCMolecule(mol=mol, mo_coeff=mo_coeff)
 
@@ -41,7 +41,7 @@ hi = system.hilbert_space
 n_samples = 2**10
 seed = 0
 sampler_seed = 0
-hidden_units = 32
+hidden_units = 256
 n_layers = 2
 alpha=1
 
@@ -77,95 +77,9 @@ psi = nk.vqs.MCState(sampler=sampler_p, model=model_p, n_samples=n_samples, seed
 model_q = nk.models.RBM(alpha=alpha, param_dtype=jnp.float64)
 sampler_q = nk.sampler.ExactSampler(hilbert=hi, machine_pow=1)
 q = nk.vqs.MCState(sampler=sampler_q, model=model_q, n_samples=n_samples, seed=seed, sampler_seed=sampler_seed)
-# KL optimization hyperparameters
-n_iter_preopt = 100
-lr_q = optax.linear_schedule(5e-2, 1e-2, n_iter_preopt)
-diag_shift_q = 1e-4
 
-# CISD calculations
-myci = ci.CISD(mf).run()
-coeffs = myci.cisdvec_to_amplitudes(myci.ci)
-configs, weights = get_cisd_important_configs(coeffs, mol.nelec)
-samples = configs_to_binary_samples(configs, mol.nao)
-weights = weights / jnp.sqrt(jnp.sum(weights**2))
-
-# Hartree-Fock state
-n_up, n_down = hi.n_fermions_per_spin
-hf_state = jnp.zeros(hi.size, dtype=jnp.int8)
-hf_state = hf_state.at[:n_up].set(1)
-hf_state = hf_state.at[hi.n_orbitals:hi.n_orbitals+n_down].set(1)
-
-# overdispersed CISD state
-cisd = CISD_pdf_overdispersed(cisd_dim=samples.shape[0], n_electrons=hi.n_fermions, n_orbitals=hi.n_orbitals, alpha=0.5, beta=0.5, func_args=(1,0), func=_raised_exponential)
-model_params = {'samples': jnp.array(samples), 'weights': jnp.array(weights, dtype=jnp.complex128)}
-sampler = nk.sampler.ExactSampler(hilbert=hi, machine_pow=1)
-q_ov = nk.vqs.MCState(sampler=sampler, model=cisd, n_samples=n_samples, seed=seed, sampler_seed=sampler_seed)
-
-vars = q_ov.variables
-vars['model_params'] = model_params
-q_ov.variables = vars
-# KL divergence over q(x)
-optimizer = optax.sgd(learning_rate=lr_q)
-
-logger = nk.logging.RuntimeLog()
-# match importance sampler to CISD
-driver = KLfwd(
-    optimizer=optimizer,
-    state_p=copy(q_ov),
-    state_q=copy(q),
-    diag_shift=diag_shift_q,
-    use_ngd=True
-)
-driver.run(n_iter=n_iter_preopt, out=logger)
-
-logger.serialize(os.path.join(out_path, 'kl_q.log'))
-
-P_ov = q_ov.to_array()
-idx = jnp.argsort(P_ov, descending=True)
-P_ov = P_ov[idx]
-
-trained_q = driver.state_q.to_array()
-trained_q = trained_q[idx]
-
-untrained_q = q.to_array()
-untrained_q = untrained_q[idx]
-
-q = driver.state_q
-lr_p = optax.linear_schedule(5e-2, 1e-2, n_iter_preopt)
-diag_shift_p = 1e-4
-model_p2 = RealWrapper(LogNeuralBackflow(hilbert=hi, hidden_units=hidden_units, n_layers=n_layers))
-sampler_p2 = nk.sampler.ExactSampler(hilbert=hi, machine_pow=1)
-q_nnbf = nk.vqs.MCState(sampler=sampler_p2, model=model_p2, n_samples=n_samples, seed=seed, sampler_seed=sampler_seed)
-
-logger = nk.logging.RuntimeLog()
-# match state amplitudes to cisd
-driver = KLfwd(
-    optimizer=optimizer,
-    state_p=copy(q_ov),
-    state_q=copy(q_nnbf),
-    diag_shift=diag_shift_p,
-    use_ngd=True,
-    use_ntk=True
-)
-driver.run(n_iter=n_iter_preopt, out=logger)
-logger.serialize(os.path.join(out_path, 'kl_nnbf.log'))
-
-P_ov = q_ov.to_array()
-idx = jnp.argsort(P_ov, descending=True)
-P_ov = P_ov[idx]
-
-trained_q = driver.state_q.to_array()
-trained_q = trained_q[idx]
-
-untrained_q = jnp.abs(psi.to_array())**2
-untrained_q = untrained_q[idx]
-
-
-vars_p = {'params': driver.state_q.variables['params']['network']}
-psi.variables = vars_p
-psi.sampler_state = driver.state_q.sampler_state
 # VMC-NIS iterations
-n_iter_vmc = 1000
+n_iter_vmc = 10
 n_iter_nis = 1
 
 # VMC-NIS diagonal shifts
@@ -211,19 +125,19 @@ driver = nis.driver.VMC_NG(
     # model_chunk_size=None,
 )
 logger = nk.logging.RuntimeLog()
-
+driver.run(
+    1, 
+    out=logger, 
+    show_progress=True,
+    timeit=True
+)
+logger = nk.logging.RuntimeLog()
 # # optimization run
 driver.run(
     n_iter_vmc, 
     out=logger, 
-    callback=[
-        ComputeEnergyCallback(
-            full_sum=True, 
-            compute_every=10,),
-        ESSCallback(compute_every=10),
-    ],
     show_progress=True,
     timeit=True
 )
-logger.serialize(os.path.join(out_path, 'vmc_run.log'))
+# logger.serialize(os.path.join(out_path, 'vmc_run.log'))
 # a, b = driver.compute_loss_and_update()
