@@ -48,12 +48,12 @@ alpha=1
 # VMC wavefunction and sampler
 model_p = LogNeuralBackflow(hilbert=hi, hidden_units=hidden_units, n_layers=n_layers)
 # sampler_p = nk.sampler.ExactSampler(hilbert=hi)
-sampler_p = nk.sampler.MetropolisExchange(hilbert=system.hilbert_space, graph=system.graph)
+sampler_p = nk.sampler.MetropolisExchange(hilbert=system.hilbert_space, n_chains=n_samples//2, graph=system.graph)
 psi = nk.vqs.MCState(sampler=sampler_p, model=model_p, n_samples=n_samples, seed=seed, sampler_seed=sampler_seed)
 
 alpha=2
 model_q = nk.models.RBM(alpha=alpha, param_dtype=jnp.float64)
-sampler_q = nk.sampler.MetropolisExchange(hilbert=system.hilbert_space, graph=system.graph, machine_pow=1)
+sampler_q = nk.sampler.MetropolisExchange(hilbert=system.hilbert_space, graph=system.graph, n_chains=n_samples//2, machine_pow=1)
 q = nk.vqs.MCState(sampler=sampler_q, model=model_q, n_samples=n_samples, seed=seed, sampler_seed=sampler_seed)
 
 # network and sampler details
