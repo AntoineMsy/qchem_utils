@@ -1,3 +1,6 @@
+import jax
+
+jax.distributed.initialize()
 import netket as nk
 import jax.numpy as jnp
 import optax
@@ -21,6 +24,7 @@ from neuralimportancesampling._src.network.cisd import CISD_pdf_overdispersed, _
 from neuralimportancesampling._src.utils.cisd import get_cisd_important_configs, configs_to_binary_samples
 from neuralimportancesampling.driver import KLfwd
 from pyscf import ci
+
 
 # create system and state
 # LiH molecule
@@ -49,8 +53,8 @@ alpha=1
 model_p = LogNeuralBackflow(hilbert=hi, hidden_units=hidden_units, n_layers=n_layers)
 # sampler_p = nk.sampler.ExactSampler(hilbert=hi)
 sampler_p = nk.sampler.MetropolisExchange(hilbert=system.hilbert_space, n_chains=n_samples//2, graph=system.graph)
-psi = nk.vqs.MCState(sampler=sampler_p, model=model_p, n_samples=n_samples, seed=seed, sampler_seed=sampler_seed)
-
+psi = nk.vqs.MCState(sampler=sampler_p, model=model_p, n_samples=n_samples, seed=seed, sampler_seed=sampler_seed, chunk_size=8192)
+print(psi.n_parameters)
 alpha=2
 model_q = nk.models.RBM(alpha=alpha, param_dtype=jnp.float64)
 sampler_q = nk.sampler.MetropolisExchange(hilbert=system.hilbert_space, graph=system.graph, n_chains=n_samples//2, machine_pow=1)

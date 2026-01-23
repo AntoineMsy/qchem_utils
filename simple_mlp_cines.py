@@ -1,3 +1,10 @@
+import jax
+from jax import config
+
+# Configuration pour ROCm
+config.update('jax_platforms', 'rocm')
+
+jax.distributed.initialize()
 import netket as nk
 import jax.numpy as jnp
 import optax
@@ -21,6 +28,7 @@ from neuralimportancesampling._src.network.cisd import CISD_pdf_overdispersed, _
 from neuralimportancesampling._src.utils.cisd import get_cisd_important_configs, configs_to_binary_samples
 from neuralimportancesampling.driver import KLfwd
 from pyscf import ci
+
 
 # create system and state
 # LiH molecule
