@@ -1,3 +1,0 @@
-name: 'MLP'
-n_layers: 2,
-n_features: 64

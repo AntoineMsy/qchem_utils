@@ -30,15 +30,6 @@ log = logging.getLogger(__name__)
 
 class MolecularNISRunner:
     # 2. Map config keys to directory name strings
-    WAVEFUNCTION_MAP = {
-        "ViT": ViT_trans_equi,
-        "MLP": MLP
-    }
-    
-    SAMPLER_MAP = {
-        "RBM": nk.models.RBM,
-        "AR": nk.models.ARNNDirectSampler # Example for Autoregressive
-    }
     DIR_NAME_MAP = {
         "ViT": "vit_backflow",
         "MLP": "mlp_backflow",
@@ -48,7 +39,7 @@ class MolecularNISRunner:
 
     def __init__(self, cfg: DictConfig):
         self.cfg = cfg
-        self.out_dir = os.getcwd() # Hydra sets the CWD to the log dir
+        self.out_dir = self.cfg.outdir
         self.seed = cfg.training.seed
         self.n_samples = cfg.training.n_s
         
@@ -87,6 +78,7 @@ class MolecularNISRunner:
             internal_model = ViT_trans_equi(
                 n_layers=self.cfg.ansatz.n_layers,
                 d_output=hi.n_orbitals * hi.n_fermions,
+                d_model=self.cfg.ansatz.d_model,
                 n_patches=hi.size // 2,
                 d_latent=self.cfg.ansatz.d_latent,
                 heads=self.cfg.ansatz.heads,
@@ -98,7 +90,7 @@ class MolecularNISRunner:
         elif self.cfg.ansatz.name == 'MLP':
             internal_model = MLP(
                 n_layers=self.cfg.ansatz.n_layers,
-                n_features=hi.size,
+                n_features=self.cfg.ansatz.n_features,
                 n_out=hi.n_orbitals * hi.n_fermions
             )
         else:
@@ -107,7 +99,7 @@ class MolecularNISRunner:
         if self.exact_sampling:
             sampler_p = nk.sampler.ExactSampler(hilbert=self.system.hilbert_space, machine_pow=1)
         else:
-            sampler_p = nk.sampler.MetropolisExchange(hilbert=self.system.hilbert_space, graph = self.system.graph, machine_pow=1)
+            sampler_p = nk.sampler.MetropolisExchange(hilbert=self.system.hilbert_space, graph = self.system.graph, n_chains=self.n_samples//2, machine_pow=1)
         
         model_p =  Backflow_noMF(
             hilbert=hi, 
@@ -119,11 +111,11 @@ class MolecularNISRunner:
     def _build_sampler_net(self):
         """Uses the mapped class to build the sampling distribution (Q)."""
         if self.cfg.sampler_net.name == 'RBM':
-            model_q = nk.models.RBM(alpha = self.cfg.ansatz.sampler_net.alpha, param_dtype=jnp.float64)
+            model_q = nk.models.RBM(alpha = self.cfg.sampler_net.alpha, param_dtype=jnp.float64)
             if self.exact_sampling:
                 sampler_q = nk.sampler.ExactSampler(hilbert=self.system.hilbert_space, machine_pow=1)
             else:
-                sampler_q = nk.sampler.MetropolisExchange(hilbert=self.system.hilbert_space, graph = self.system.graph, machine_pow=1)
+                sampler_q = nk.sampler.MetropolisExchange(hilbert=self.system.hilbert_space, graph = self.system.graph, n_chains=self.n_samples//2, machine_pow=1)
         elif self.cfg.sampler_net.name == 'FermionAR':
             base_model = ARNNDense(
                 hilbert=self.system.hilbert_space,
@@ -148,15 +140,15 @@ class MolecularNISRunner:
         log.info("Initializing Networks...")
         
         # 1. Setup Wavefunction (P)
-        model_p, sampler_p = self._build_psi(self.cfg.ansatz.wavefunction)
+        model_p, sampler_p = self._build_psi()
         # Note: Depending on logic, you might need RealWrapper here immediately or later
         self.psi = nk.vqs.MCState(
             sampler=sampler_p, model=model_p, 
-            n_samples=self.n_samples, seed=self.seed, sampler_seed=self.seed
+            n_samples=self.n_samples, seed=self.seed, sampler_seed=self.seed, chunk_size=8192
         )
 
         # 2. Setup Importance Sampler (Q)
-        model_q, sampler_q = self._build_sampler_net(self.cfg.ansatz.sampler)
+        model_q, sampler_q = self._build_sampler_net()
         self.q = nk.vqs.MCState(
             sampler=sampler_q, model=model_q, 
             n_samples=self.n_samples, seed=self.seed, sampler_seed=self.seed
@@ -187,7 +179,10 @@ class MolecularNISRunner:
             'weights': jnp.array(weights, dtype=jnp.complex128)
         }
         
-        sampler = nk.sampler.ExactSampler(hilbert=self.hilbert, machine_pow=1)
+        if self.exact_sampling:
+            sampler = nk.sampler.ExactSampler(hilbert=self.system.hilbert_space, machine_pow=1)
+        else:
+            sampler = nk.sampler.MetropolisExchange(hilbert=self.system.hilbert_space, graph = self.system.graph, machine_pow=1)
         self.q_ov = nk.vqs.MCState(
             sampler=sampler, model=cisd_model, 
             n_samples=self.n_samples, seed=self.seed, sampler_seed=self.seed
@@ -209,8 +204,8 @@ class MolecularNISRunner:
         optimizer = optax.sgd(learning_rate=lr_schedule)
 
         diag_shift = self.cfg.training.pretrain.diag_shift
-        use_ngd_sampler = cfg_pretrain('use_ngd_sampler', False)
-        use_ngf_wf = cfg_pretrain('use_ngd_pretrain', False)
+        use_ngd_sampler = cfg_pretrain.get('use_ngd_sampler', False)
+        use_ngf_wf = cfg_pretrain.get('use_ngd_pretrain', False)
         # 1. Train Q (Importance Sampler) to match CISD
         log.info("Pre-training Q...")
         driver_q = KLfwd(
@@ -218,7 +213,7 @@ class MolecularNISRunner:
             state_p=copy(self.q_ov), # Target
             state_q=copy(self.q),    # Trainable
             diag_shift=diag_shift,
-            use_ngd=False
+            use_ngd=use_ngd_sampler
         )
         logger_q = nk.logging.RuntimeLog()
         driver_q.run(n_iter=n_iter, out=logger_q)
@@ -228,17 +223,24 @@ class MolecularNISRunner:
         # 2. Train P (Wavefunction) to match CISD
         log.info("Pre-training Psi...")
         model_p2 = RealWrapper(self.psi.model)
-        sampler_p2 = self.psi.sampler
-        sampler_p2.machine_pow = 1
-        q_nnbf = nk.vqs.MCState(sampler=sampler_p2, model=model_p2, n_samples=self.n_samples, seed=0, sampler_seed=0)
+        
+        if self.exact_sampling:
+            sampler_p2 = nk.sampler.ExactSampler(hilbert=self.system.hilbert_space, machine_pow=1)
+        else:
+            sampler_p2 = nk.sampler.MetropolisExchange(hilbert=self.system.hilbert_space, graph = self.system.graph, machine_pow=1)
 
+        q_nnbf = nk.vqs.MCState(sampler=sampler_p2, model=model_p2, n_samples=self.n_samples, seed=0, sampler_seed=0)
+        if use_ngf_wf:
+            use_ntk=True
+        else:
+            use_ntk=False
         driver_p = KLfwd(
             optimizer=optimizer,
             state_p=copy(self.q_ov),
             state_q=copy(q_nnbf),
             diag_shift=diag_shift,
-            use_ngd=True,
-            use_ntk=True
+            use_ngd=use_ngf_wf,
+            use_ntk=use_ntk
         )
         logger_p = nk.logging.RuntimeLog()
         driver_p.run(n_iter=n_iter, out=logger_p)
@@ -266,7 +268,7 @@ class MolecularNISRunner:
         # NIS Driver Config
         nis_build_params = {
             "optimizer": opt_nis,
-            "update_fn": "snr_mat_sr",
+            "update_fn": t_cfg.nis.update_fn,
             "debug": False,   
             "diag_shift_nis": t_cfg.nis.diag_shift,        
             "solver_fn": nk.optimizer.solver.solve        
@@ -286,24 +288,20 @@ class MolecularNISRunner:
             do_cache=True,
             use_ntk=True,
             on_the_fly=False,
-            batch_chunk_size=self.n_samples,
+            batch_chunk_size=1024,
         )
         
-        logger = nk.logging.RuntimeLog()
+        logger = nk.logging.JsonLog(os.path.join(self.out_dir, 'vmc_run.log'), save_params=False)
         
         driver.run(
             t_cfg.vmc.iterations, 
             out=logger, 
-            callback=[
-                ComputeEnergyCallback(full_sum=True, compute_every=10),
-                ESSCallback(compute_every=10),
-            ],
             show_progress=True,
             timeit=True
         )
         
         # Serialize Final Logs
-        logger.serialize(os.path.join(self.out_dir, 'vmc_run.log'))
+        # logger.serialize(os.path.join(self.out_dir, 'vmc_run.log'))
         log.info(f"Run finished. Results saved to {self.out_dir}")
     
     def __call__(self):

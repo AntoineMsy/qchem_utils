@@ -2,14 +2,14 @@
 defaults:
   - _self_
   - task: molecular_nis
-  - sampler_net: rbm
+  - sampler_net: fermionar
   - ansatz: mlp
 
 hydra:
   run:
     # Structure logs by Molecule ID, Network Type, and Date
-    dir: outputs/${system.cid}/${ansatz.name}/${sampler_net.name}/${training.n_s}/${now:%Y-%m-%d_%H-%M}
-outdir: outputs/${system.cid}/${ansatz.name}/${sampler_net.name}/${training.n_s}/${now:%Y-%m-%d_%H-%M}
+    dir: outputs/${system.cid}/${ansatz.name}/${sampler_net.name}/${now:%Y-%m-%d_%H-%M}
+outdir: outputs/${system.cid}/${ansatz.name}/${sampler_net.name}/${now:%Y-%m-%d_%H-%M}
 
 system:
   cid: 166630 # Li2O
@@ -34,11 +34,11 @@ training:
     iterations: 3000
     lr_start: 5e-2
     lr_end: 1e-2
-    diag_shift: 1e-5
+    diag_shift: 1e-4
   
   nis:
     iterations: 1
-    update_fn: 'snr_mat_sr'
-    lr_start: 1e-2
-    lr_end: 7e-3
-    diag_shift: 1e-5
+    update_fn: 'snr_mat'
+    lr_start: 1e-4
+    lr_end: 1e-4
+    diag_shift: 1e-2

@@ -1,1 +1,1 @@
-_target_ : qchem_utils._src.tasks.MolecularNISRunner
+_target_ : qchem_utils.MolecularNISRunner
