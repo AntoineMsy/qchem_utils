@@ -41,4 +41,4 @@ training:
     update_fn: 'snr_mat'
     lr_start: 1e-4
     lr_end: 1e-4
-    diag_shift: 1e-2
+    diag_shift: 1e-1

@@ -97,9 +97,9 @@ class MolecularNISRunner:
             raise ValueError('Wave function name unsupported')
         
         if self.exact_sampling:
-            sampler_p = nk.sampler.ExactSampler(hilbert=self.system.hilbert_space, machine_pow=1)
+            sampler_p = nk.sampler.ExactSampler(hilbert=self.system.hilbert_space)
         else:
-            sampler_p = nk.sampler.MetropolisExchange(hilbert=self.system.hilbert_space, graph = self.system.graph, n_chains=self.n_samples//2, machine_pow=1)
+            sampler_p = nk.sampler.MetropolisExchange(hilbert=self.system.hilbert_space, graph = self.system.graph, n_chains=self.n_samples//2)
         
         model_p =  Backflow_noMF(
             hilbert=hi, 
@@ -227,7 +227,7 @@ class MolecularNISRunner:
         if self.exact_sampling:
             sampler_p2 = nk.sampler.ExactSampler(hilbert=self.system.hilbert_space, machine_pow=1)
         else:
-            sampler_p2 = nk.sampler.MetropolisExchange(hilbert=self.system.hilbert_space, graph = self.system.graph, machine_pow=1)
+            sampler_p2 = nk.sampler.MetropolisExchange(hilbert=self.system.hilbert_space, n_chains=self.n_samples//2, graph = self.system.graph, machine_pow=1)
 
         q_nnbf = nk.vqs.MCState(sampler=sampler_p2, model=model_p2, n_samples=self.n_samples, seed=0, sampler_seed=0)
         if use_ngf_wf:
@@ -283,6 +283,7 @@ class MolecularNISRunner:
             diag_shift=t_cfg.vmc.diag_shift,
             # linear_solver_fn=nk.optimizer.solver.solve,    
             nis_driver_class=NISDriver,
+            # momentum=0.9,
             nis_driver_build_parameters=nis_build_params,
             nis_driver_run_parameters={"n_iter": t_cfg.nis.iterations},
             do_cache=True,
@@ -297,6 +298,13 @@ class MolecularNISRunner:
             t_cfg.vmc.iterations, 
             out=logger, 
             show_progress=True,
+            callback=[
+                        ComputeEnergyCallback(
+                            full_sum=False,
+                            compute_from_psi2=True,
+                            compute_every=50,),
+                        ESSCallback(compute_every=25)
+                    ],
             timeit=True
         )
         
