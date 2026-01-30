@@ -11,7 +11,7 @@ import jax.numpy as jnp
 import netket as nk
 import optax
 from qchem_utils._src.nets.bf import Backflow_noMF, MLP
-from qchem_utils import ViT_trans_equi
+from qchem_utils import ViT_trans_equi, ViT_SA
 # Domain Specific Imports (Based on your script)
 from neuralimportancesampling._src.driver.ngd_antoine.grad_sample.models import PCMolecule 
 from netket.models import ARNNDense
@@ -76,6 +76,19 @@ class MolecularNISRunner:
         hi = self.system.hilbert_space
         if self.cfg.ansatz.name == "ViT":
             internal_model = ViT_trans_equi(
+                n_layers=self.cfg.ansatz.n_layers,
+                d_output=hi.n_orbitals * hi.n_fermions,
+                d_model=self.cfg.ansatz.d_model,
+                n_patches=hi.size // 2,
+                d_latent=self.cfg.ansatz.d_latent,
+                heads=self.cfg.ansatz.heads,
+                b=1,
+                graph=nk.graph.Chain(length=hi.size // 2, pbc=False),
+                # ... other params from cfg ...
+                complex=self.cfg.ansatz.complex
+            )
+        elif self.cfg.ansatz.name == 'ViTSA':
+            internal_model = ViT_SA(
                 n_layers=self.cfg.ansatz.n_layers,
                 d_output=hi.n_orbitals * hi.n_fermions,
                 d_model=self.cfg.ansatz.d_model,

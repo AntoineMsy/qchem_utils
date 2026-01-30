@@ -1,0 +1,6 @@
+name: 'ViTSA'
+n_layers: 2
+d_model: 16
+d_latent: 16
+heads: 8
+complex: true
