@@ -167,6 +167,10 @@ class MolecularNISRunner:
             n_samples=self.n_samples, seed=self.seed, sampler_seed=self.seed
         )
 
+    def setup_fullsum(self):
+        model_p, sampler_p = self._build_psi()
+        self.psi = nk.vqs.FullSumState(model = model_p, hilbert=self.system.hilbert_space)
+
     def compute_cisd_target(self):
         """Computes CISD to create the 'Overdispersed' target distribution."""
         log.info("Running CISD calculation...")
@@ -324,7 +328,18 @@ class MolecularNISRunner:
         # Serialize Final Logs
         # logger.serialize(os.path.join(self.out_dir, 'vmc_run.log'))
         log.info(f"Run finished. Results saved to {self.out_dir}")
-    
+
+        def run_fullsum(self):
+            t_cfg = self.cfg.training
+        
+            # Learning Rate Schedules
+            lr_vmc = optax.linear_schedule(t_cfg.vmc.lr_start, t_cfg.vmc.lr_end, transition_steps=t_cfg.vmc.iterations)
+            lr_nis = optax.linear_schedule(t_cfg.nis.lr_start, t_cfg.nis.lr_end, transition_steps=t_cfg.vmc.iterations)
+            
+            opt_vmc = optax.sgd(lr_vmc)
+            opt_nis = optax.sgd(lr_nis)
+            driver = nk.driver.VMC_SR()
+            
     def __call__(self):
         self.setup_system()
         self.setup_networks()

@@ -14,8 +14,8 @@ outdir: outputs/${system.cid}/${ansatz.name}/${sampler_net.name}/${training.n_s}
 system:
   cid: 947 # N2
   basis: "STO-3G"
-  # cache_dir: "/leonardo_work/EUHPC_A05_006/NeurIS/qchem_utils/pubchem_cache"
-  cache_dir: '/Users/antoine.misery/Documents/These/projects/importance_sampling/qchem_utils/pubchem_cache'
+  cache_dir: "/leonardo_work/EUHPC_A05_006/NeurIS/qchem_utils/pubchem_cache"
+  # cache_dir: '/Users/antoine.misery/Documents/These/projects/importance_sampling/qchem_utils/pubchem_cache'
 exact_sampling: false
 
 training:
@@ -23,7 +23,7 @@ training:
   seed: 0
   
   pretrain:
-    iterations: 100
+    iterations: 200
     lr: 0.05
     diag_shift: 1e-4
     use_ngd_sampler: false
@@ -32,13 +32,13 @@ training:
   
   vmc:
     iterations: 3000
-    lr_start: 5e-2
-    lr_end: 1e-2
-    diag_shift: 1e-5
+    lr_start: 5e-3
+    lr_end: 1e-4
+    diag_shift: 1e-4
   
   nis:
     iterations: 1
-    update_fn: 'snr_mat_sr'
+    update_fn: 'snr_mat'
     lr_start: 1e-2
     lr_end: 7e-3
     diag_shift: 1e-5

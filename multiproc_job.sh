@@ -40,4 +40,4 @@ cd "$WORK/NeurIS/qchem_utils/" || exit 1
 
 source "${UV_PROJECT_ENVIRONMENT}/bin/activate"
 
-srun python main.py --config-name mol_nis ansatz="${ANSATZ}" training.n_s=${NS}
+srun python main.py --config-name mol_nis_n2_test ansatz="${ANSATZ}" training.n_s=${NS}
