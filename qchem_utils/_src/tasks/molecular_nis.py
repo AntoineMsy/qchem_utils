@@ -55,6 +55,8 @@ class MolecularNISRunner:
         self.q_cisd = None # Pre-training target
         self.exact_sampling = cfg.exact_sampling
 
+        self.fullsum = cfg.get('fullsum', False)
+
     def setup_system(self):
         """Initializes the PCMolecule and Hilbert Space."""
         log.info(f"Setting up system for CID: {self.cfg.system.cid}")
@@ -329,20 +331,35 @@ class MolecularNISRunner:
         # logger.serialize(os.path.join(self.out_dir, 'vmc_run.log'))
         log.info(f"Run finished. Results saved to {self.out_dir}")
 
-        def run_fullsum(self):
-            t_cfg = self.cfg.training
+    def run_fullsum(self):
+        t_cfg = self.cfg.training
+    
+        # Learning Rate Schedules
+        lr_vmc = optax.linear_schedule(t_cfg.vmc.lr_start, t_cfg.vmc.lr_end, transition_steps=t_cfg.vmc.iterations)
+        lr_nis = optax.linear_schedule(t_cfg.nis.lr_start, t_cfg.nis.lr_end, transition_steps=t_cfg.vmc.iterations)
         
-            # Learning Rate Schedules
-            lr_vmc = optax.linear_schedule(t_cfg.vmc.lr_start, t_cfg.vmc.lr_end, transition_steps=t_cfg.vmc.iterations)
-            lr_nis = optax.linear_schedule(t_cfg.nis.lr_start, t_cfg.nis.lr_end, transition_steps=t_cfg.vmc.iterations)
-            
-            opt_vmc = optax.sgd(lr_vmc)
-            opt_nis = optax.sgd(lr_nis)
-            driver = nk.driver.VMC_SR()
+        opt_vmc = optax.sgd(lr_vmc)
+        opt_nis = optax.sgd(lr_nis)
+        driver = nk.driver.VMC(hamiltonian=self.hamiltonian,
+                                optimizer=opt_vmc,
+                                variational_state=self.psi)
+        
+        logger = nk.logging.JsonLog(os.path.join(self.out_dir, 'vmc_run.log'), save_params=False)
+        
+        driver.run(
+            t_cfg.vmc.iterations, 
+            out=logger, 
+            show_progress=True,
+            timeit=True
+        )
             
     def __call__(self):
         self.setup_system()
-        self.setup_networks()
-        self.compute_cisd_target()
-        self.run_pretraining()
-        self.run_vmc_nis()
+        if self.fullsum:
+            self.setup_fullsum()
+            self.run_fullsum()
+        else:
+            self.setup_networks()
+            self.compute_cisd_target()
+            self.run_pretraining()
+            self.run_vmc_nis()
