@@ -5,9 +5,8 @@ from functools import partial
 import netket as nk
 
 from qchem_utils._src.nets.Embedd import Embed
-from netket_fermions._src.nets.vit.FMHAL import Encoder_FMHAL
-from netket_fermions._src.nets.vit.FMHAL2 import Encoder_FMHAL_roll
-from netket_fermions._src.nets.vit.Out_layer import OuputHead, OuputHead_Luca
+from qchem_utils._src.nets.FMHAL import Encoder_FMHAL
+from qchem_utils._src.nets.Out_layer import OuputHead, OuputHead_Luca
 
 def log_cosh(x):
     sgn_x = -2 * jnp.signbit(x.real) + 1

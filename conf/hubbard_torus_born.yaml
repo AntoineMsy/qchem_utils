@@ -1,0 +1,46 @@
+# config.yaml
+defaults:
+  - _self_
+  - task: hubbard_nis
+  - sampler_net: vmc
+  - ansatz: mlp
+
+hydra:
+  run:
+    # Structure logs by Molecule ID, Network Type, and Date
+    dir: outputs/hubbard_${system.graph}/${sampler_net.name}/${training.n_s}/${now:%Y-%m-%d_%H-%M}
+outdir:  outputs/hubbard_${system.graph}/${sampler_net.name}/${training.n_s}/${now:%Y-%m-%d_%H-%M}
+
+system:
+  graph: "torus"
+  Lx: 4
+  Ly: 4
+  U: 8
+  t: 1
+
+exact_sampling: false
+
+training:
+  n_s: 1024
+  seed: 0
+  
+  pretrain:
+    iterations: 100
+    lr: 0.01
+    diag_shift: 1e-4
+    use_ngd_sampler: true
+
+  vmc:
+    iterations: 1500
+    lr_start: 3e-2
+    lr_end: 5e-3
+    diag_shift_start: 1e-4
+    diag_shift_end: 1e-8
+    dshift_transition_steps: 300
+  
+  nis:
+    iterations: 1
+    update_fn: 'snr_mat_sr'
+    lr_start: 1e-2
+    lr_end: 1e-7
+    diag_shift: 1e-5

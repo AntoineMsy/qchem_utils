@@ -1,0 +1,52 @@
+# compare_config.yaml
+# Configuration for compare_runs.py
+# ---------------------------------------------------------------------------
+# Run paths to compare.  Can also be passed as positional CLI arguments,
+# which will override this list.
+# ---------------------------------------------------------------------------
+run_paths:
+  # - outputs/hubbard_torus/RBM/1024/2026-02-27_22-09
+  # - outputs/hubbard_torus/FermionAR/1024/2026-02-27_23-00
+  # - outputs/hubbard_torus/Overdispersed/2048/2026-02-28_10-00
+
+# ---------------------------------------------------------------------------
+# Subdirectory inside each run_path where the NPZ/PNG files are saved
+# (matches the `out_dir` argument given to the plot callbacks, e.g. "plots")
+# ---------------------------------------------------------------------------
+plots_subdir: plots
+
+# ---------------------------------------------------------------------------
+# Output directory for the comparison figures
+# ---------------------------------------------------------------------------
+out_dir: compare_output
+
+# ---------------------------------------------------------------------------
+# Which config keys to use when building the legend label for each run.
+# Dotted notation follows the Hydra config structure.
+# Examples: "sampler_net.name", "training.n_s", "system.U", "system.graph"
+# ---------------------------------------------------------------------------
+label_fields:
+  - sampler_net.name
+  - training.n_s
+  - system.U
+  - system.graph
+
+# ---------------------------------------------------------------------------
+# Energy plot options
+# ---------------------------------------------------------------------------
+
+# Whether to plot E/N_sites (true) or raw total energy (false)
+energy_per_site: true
+
+# x-axis for the training-energy comparison: "steps" or "time"
+x_axis: steps
+
+# Show faint per-step scatter behind the moving-average line
+show_raw_scatter: false
+
+# Moving-average window (in steps) applied to training-energy curves
+moving_average_window: 20
+
+# Optional exact ground-state energy *per site* drawn as a reference line.
+# Leave commented out if not known or handled per-run from the NPZ files.
+# exact_energy: -0.5321

@@ -3,13 +3,15 @@ defaults:
   - _self_
   - task: molecular_nis
   - sampler_net: rbm
-  - ansatz: vit
-  
+  - ansatz: vit_sa
+
+fullsum: true
+
 hydra:
   run:
     # Structure logs by Molecule ID, Network Type, and Date
-    dir: outputs/${system.cid}/${ansatz.name}/${sampler_net.name}/${training.n_s}/${now:%Y-%m-%d_%H-%M}
-outdir: outputs/${system.cid}/${ansatz.name}/${sampler_net.name}/${training.n_s}/${now:%Y-%m-%d_%H-%M}
+    dir: outputs/fs/${system.cid}/${ansatz.name}/${sampler_net.name}/${training.n_s}/${now:%Y-%m-%d_%H-%M}
+outdir: outputs/fs/${system.cid}/${ansatz.name}/${sampler_net.name}/${training.n_s}/${now:%Y-%m-%d_%H-%M}
 
 system:
   cid: 947 # N2

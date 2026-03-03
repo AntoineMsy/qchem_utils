@@ -2,16 +2,21 @@ import hydra
 from hydra.utils import call, instantiate
 from omegaconf import DictConfig, OmegaConf
 import os
+import json
 import logging
 from copy import copy
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 # JAX / NetKet
 import jax.numpy as jnp
 import netket as nk
 import optax
+import advanced_drivers as advd
 from qchem_utils._src.nets.bf import Backflow_noMF, MLP
-from qchem_utils import ViT_trans_equi, ViT_SA
+from qchem_utils.nets import ViT_trans_equi, ViT_SA
 # Domain Specific Imports (Based on your script)
 from neuralimportancesampling._src.driver.ngd_antoine.grad_sample.models import PCMolecule 
 from netket.models import ARNNDense
@@ -19,12 +24,21 @@ from neuralimportancesampling._src.driver.ngd_antoine.grad_sample.ansatz import 
 from neuralimportancesampling.driver import NISDriver, KLfwd
 from neuralimportancesampling._src.autoregressive.constrained_ar_model import ConstrainedFermionARNN
 from neuralimportancesampling._src.autoregressive.constrained_ar_sampler import ConstrainedARDirectSampler
-from neuralimportancesampling.wrapper import RealWrapper
+from neuralimportancesampling.wrapper import RealWrapper, OverdispersedWrapper
 from neuralimportancesampling.callback import ComputeEnergyCallback, ESSCallback
 from neuralimportancesampling._src.network.cisd import CISD_pdf_overdispersed, _raised_exponential
 from neuralimportancesampling._src.utils.cisd import get_cisd_important_configs, configs_to_binary_samples
 from pyscf import ci
 import neuralimportancesampling as nis
+
+from qchem_utils.utils import (
+    SaveStatesCallback,
+    EnergyPerSiteCallback,
+    PlotEnergyFromPsiCallback,
+    PlotTrainingEnergyCallback,
+    PlotAlphaCallback,
+    SNRAlphaCallback,
+)
 
 log = logging.getLogger(__name__)
 
@@ -54,20 +68,24 @@ class MolecularNISRunner:
         self.q = None   # Distribution Q
         self.q_cisd = None # Pre-training target
         self.exact_sampling = cfg.exact_sampling
+        self.pretraining = False
+        # exact_energy can be provided in cfg (e.g. from FCI/CCSD(T) reference)
+        self.exact_energy = cfg.get('exact_energy', None)
 
         self.fullsum = cfg.get('fullsum', False)
 
     def setup_system(self):
         """Initializes the PCMolecule and Hilbert Space."""
         log.info(f"Setting up system for CID: {self.cfg.system.cid}")
-        
+        print(self.cfg.system.cache_dir)
         self.mol, mo_coeff, mf = PCMolecule.molecule_cached(
             cid=self.cfg.system.cid, 
             dir=self.cfg.system.cache_dir, 
             basis=self.cfg.system.basis
         )
         self.system = PCMolecule(mol=self.mol, mo_coeff=mo_coeff)
-        self.hamiltonian = self.system.hamiltonian.to_jax_operator()
+        # self.hamiltonian = self.system.hamiltonian.to_jax_operator()
+        self.hamiltonian = self.system.hamiltonian
         self.hilbert = self.system.hilbert_space
         
         # Store mean-field object for CISD calculation later
@@ -125,13 +143,16 @@ class MolecularNISRunner:
 
     def _build_sampler_net(self):
         """Uses the mapped class to build the sampling distribution (Q)."""
+        self.pretraining = False
         if self.cfg.sampler_net.name == 'RBM':
+            self.pretraining = True
             model_q = nk.models.RBM(alpha = self.cfg.sampler_net.alpha, param_dtype=jnp.float64)
             if self.exact_sampling:
                 sampler_q = nk.sampler.ExactSampler(hilbert=self.system.hilbert_space, machine_pow=1)
             else:
                 sampler_q = nk.sampler.MetropolisExchange(hilbert=self.system.hilbert_space, graph = self.system.graph, n_chains=self.n_samples//2, machine_pow=1)
         elif self.cfg.sampler_net.name == 'FermionAR':
+            self.pretraining = True
             base_model = ARNNDense(
                 hilbert=self.system.hilbert_space,
                 layers=1,
@@ -145,6 +166,20 @@ class MolecularNISRunner:
                                              target=-1 
                                              )
             sampler_q = ConstrainedARDirectSampler(self.system.hilbert_space)
+        elif self.cfg.sampler_net.name == 'Overdispersed':
+            model_q = OverdispersedWrapper(self.psi.model, alpha_init=self.cfg.sampler_net.alpha_init)
+            if self.exact_sampling:
+                sampler_q = nk.sampler.ExactSampler(hilbert=self.system.hilbert_space, machine_pow=1)
+            else:
+                sampler_q = nk.sampler.MetropolisExchange(
+                    hilbert=self.system.hilbert_space,
+                    graph=self.system.graph,
+                    n_chains=self.n_samples // 2,
+                    machine_pow=1,
+                )
+        elif self.cfg.sampler_net.name == 'VMC':
+            # Standard Born sampling – no Q distribution needed
+            return None, None
         else:
             raise ValueError('Sampler model name unsupported')
 
@@ -162,12 +197,13 @@ class MolecularNISRunner:
             n_samples=self.n_samples, seed=self.seed, sampler_seed=self.seed, chunk_size=8192
         )
 
-        # 2. Setup Importance Sampler (Q)
+        # 2. Setup Importance Sampler (Q) – skipped for plain VMC
         model_q, sampler_q = self._build_sampler_net()
-        self.q = nk.vqs.MCState(
-            sampler=sampler_q, model=model_q, 
-            n_samples=self.n_samples, seed=self.seed, sampler_seed=self.seed
-        )
+        if model_q is not None:
+            self.q = nk.vqs.MCState(
+                sampler=sampler_q, model=model_q, 
+                n_samples=self.n_samples, seed=self.seed, sampler_seed=self.seed
+            )
 
     def setup_fullsum(self):
         model_p, sampler_p = self._build_psi()
@@ -224,7 +260,7 @@ class MolecularNISRunner:
 
         diag_shift = self.cfg.training.pretrain.diag_shift
         use_ngd_sampler = cfg_pretrain.get('use_ngd_sampler', False)
-        use_ngf_wf = cfg_pretrain.get('use_ngd_pretrain', False)
+        use_ngd_wf = cfg_pretrain.get('use_ngd_pretrain', False)
         # 1. Train Q (Importance Sampler) to match CISD
         log.info("Pre-training Q...")
         driver_q = KLfwd(
@@ -248,8 +284,8 @@ class MolecularNISRunner:
         else:
             sampler_p2 = nk.sampler.MetropolisExchange(hilbert=self.system.hilbert_space, n_chains=self.n_samples//2, graph = self.system.graph, machine_pow=1)
 
-        q_nnbf = nk.vqs.MCState(sampler=sampler_p2, model=model_p2, n_samples=self.n_samples, seed=0, sampler_seed=0)
-        if use_ngf_wf:
+        q_nnbf = nk.vqs.MCState(sampler=sampler_p2, model=model_p2, n_samples=self.n_samples, seed=self.seed, sampler_seed=self.seed)
+        if use_ngd_wf:
             use_ntk=True
         else:
             use_ntk=False
@@ -258,7 +294,7 @@ class MolecularNISRunner:
             state_p=copy(self.q_ov),
             state_q=copy(q_nnbf),
             diag_shift=diag_shift,
-            use_ngd=use_ngf_wf,
+            use_ngd=use_ngd_wf,
             use_ntk=use_ntk
         )
         logger_p = nk.logging.RuntimeLog()
@@ -270,6 +306,60 @@ class MolecularNISRunner:
         self.psi.sampler_state = driver_p.state_q.sampler_state
         
         log.info("Pre-training complete.")
+
+    def run_vmc_sr(self):
+        """Standard Born-sampling VMC with SR preconditioner."""
+        log.info("Starting VMC-SR Optimization...")
+        t_cfg = self.cfg.training
+
+        lr_vmc = optax.linear_schedule(
+            t_cfg.vmc.lr_start, t_cfg.vmc.lr_end,
+            transition_steps=t_cfg.vmc.iterations,
+        )
+        # Support both single diag_shift and start/end scheduling
+        diag_shift_start = t_cfg.vmc.get('diag_shift_start', t_cfg.vmc.diag_shift)
+        diag_shift_end = t_cfg.vmc.get('diag_shift_end', t_cfg.vmc.diag_shift)
+        dshift_steps = t_cfg.vmc.get('dshift_transition_steps', t_cfg.vmc.iterations)
+        diagshift_vmc = optax.linear_schedule(
+            diag_shift_start, diag_shift_end, transition_steps=dshift_steps,
+        )
+        use_ntk = self.psi.n_samples < self.psi.n_parameters
+        driver = advd.driver.VMC_NG(
+            hamiltonian=self.hamiltonian,
+            optimizer=optax.sgd(lr_vmc),
+            variational_state=copy(self.psi),
+            diag_shift=diagshift_vmc,
+            use_ntk=use_ntk,
+        )
+
+        logger = nk.logging.JsonLog(
+            os.path.join(self.out_dir, "vmc_run"), save_params=False
+        )
+        n_orbs = self.hilbert.n_orbitals
+        exact_per_orb = (
+            self.exact_energy / n_orbs if self.exact_energy is not None else None
+        )
+
+        driver.run(
+            t_cfg.vmc.iterations,
+            out=logger,
+            show_progress=True,
+            callback=[
+                PlotEnergyFromPsiCallback(
+                    out_dir=os.path.join(self.out_dir, "plots"),
+                    plot_every=100,
+                    exact_energy=exact_per_orb,
+                ),
+                PlotTrainingEnergyCallback(
+                    out_dir=os.path.join(self.out_dir, "plots"),
+                    plot_every=100,
+                    n_sites=n_orbs,
+                    exact_energy=exact_per_orb,
+                ),
+            ],
+            timeit=True,
+        )
+        log.info(f"Run finished. Results saved to {self.out_dir}")
 
     def run_vmc_nis(self):
         """Runs the main NIS-VMC optimization loop."""
@@ -295,7 +385,7 @@ class MolecularNISRunner:
         
         # VMC Driver
         driver = nis.driver.VMC_NG(
-            hamiltonian=self.hamiltonian,
+            hamiltonian=self.hamiltonian.to_jax_operator(),
             optimizer=opt_vmc,
             state_p=copy(self.psi),
             state_q=copy(self.q),
@@ -312,7 +402,11 @@ class MolecularNISRunner:
         )
         
         logger = nk.logging.JsonLog(os.path.join(self.out_dir, 'vmc_run.log'), save_params=False)
-        
+      
+        n_orbs = self.hilbert.size
+        exact_per_orb = (
+            self.exact_energy / n_orbs if self.exact_energy is not None else None
+        )
         driver.run(
             t_cfg.vmc.iterations, 
             out=logger, 
@@ -322,7 +416,34 @@ class MolecularNISRunner:
                             full_sum=False,
                             compute_from_psi2=True,
                             compute_every=50,),
-                        ESSCallback(compute_every=25)
+                        ESSCallback(compute_every=25),
+                        EnergyPerSiteCallback(compute_every=100),
+                        PlotEnergyFromPsiCallback(
+                            out_dir=os.path.join(self.out_dir, "plots"),
+                            plot_every=100,
+                            exact_energy=exact_per_orb,
+                        ),
+                        PlotTrainingEnergyCallback(
+                            out_dir=os.path.join(self.out_dir, "plots"),
+                            plot_every=100,
+                            n_sites=n_orbs,
+                            exact_energy=exact_per_orb,
+                        ),
+                        *(
+                            [
+                                PlotAlphaCallback(
+                                    out_dir=os.path.join(self.out_dir, "plots"),
+                                    plot_every=100,
+                                ),
+                                SNRAlphaCallback(
+                                    out_dir=os.path.join(self.out_dir, "plots"),
+                                    H_sp=self.hamiltonian.to_sparse(),
+                                    compute_every=50,
+                                    plot_every=100,
+                                ),
+                            ]
+                            if self.cfg.sampler_net.name == "Overdispersed" else []
+                        ),
                     ],
             timeit=True
         )
@@ -339,13 +460,13 @@ class MolecularNISRunner:
         lr_nis = optax.linear_schedule(t_cfg.nis.lr_start, t_cfg.nis.lr_end, transition_steps=t_cfg.vmc.iterations)
         
         opt_vmc = optax.sgd(lr_vmc)
-        opt_nis = optax.sgd(lr_nis)
+        
         driver = nk.driver.VMC(hamiltonian=self.hamiltonian,
                                 optimizer=opt_vmc,
                                 variational_state=self.psi)
         
         logger = nk.logging.JsonLog(os.path.join(self.out_dir, 'vmc_run.log'), save_params=False)
-        
+        print(type(self.hamiltonian))
         driver.run(
             t_cfg.vmc.iterations, 
             out=logger, 
@@ -360,6 +481,9 @@ class MolecularNISRunner:
             self.run_fullsum()
         else:
             self.setup_networks()
-            self.compute_cisd_target()
-            self.run_pretraining()
-            self.run_vmc_nis()
+            if self.cfg.sampler_net.name == 'VMC':
+                self.run_vmc_sr()
+            else:
+                if self.pretraining:
+                    self.run_pretraining()
+                self.run_vmc_nis()

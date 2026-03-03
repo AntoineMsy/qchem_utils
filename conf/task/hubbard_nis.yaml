@@ -1,0 +1,1 @@
+_target_ : qchem_utils.tasks.HubbardNISRunner

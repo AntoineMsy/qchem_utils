@@ -1,0 +1,6 @@
+name: 'ViT'
+n_layers: 2
+d_model: 8
+d_latent: 8
+heads: 8
+complex: true
