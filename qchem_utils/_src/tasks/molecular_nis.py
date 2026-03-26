@@ -39,7 +39,7 @@ from qchem_utils.utils import (
     PlotAlphaCallback,
     SNRAlphaCallback,
 )
-
+from qchem_utils.callbacks import IterativeNormalizationCallback
 log = logging.getLogger(__name__)
 
 class MolecularNISRunner:
@@ -417,18 +417,19 @@ class MolecularNISRunner:
                             compute_from_psi2=True,
                             compute_every=50,),
                         ESSCallback(compute_every=25),
-                        EnergyPerSiteCallback(compute_every=100),
-                        PlotEnergyFromPsiCallback(
-                            out_dir=os.path.join(self.out_dir, "plots"),
-                            plot_every=100,
-                            exact_energy=exact_per_orb,
-                        ),
-                        PlotTrainingEnergyCallback(
-                            out_dir=os.path.join(self.out_dir, "plots"),
-                            plot_every=100,
-                            n_sites=n_orbs,
-                            exact_energy=exact_per_orb,
-                        ),
+                        # EnergyPerSiteCallback(compute_every=100),
+                        # PlotEnergyFromPsiCallback(
+                        #     out_dir=os.path.join(self.out_dir, "plots"),
+                        #     plot_every=100,
+                        #     exact_energy=exact_per_orb,
+                        # ),
+                        IterativeNormalizationCallback(),
+                        # PlotTrainingEnergyCallback(
+                        #     out_dir=os.path.join(self.out_dir, "plots"),
+                        #     plot_every=100,
+                        #     n_sites=n_orbs,
+                        #     exact_energy=exact_per_orb,
+                        # ),
                         *(
                             [
                                 PlotAlphaCallback(
