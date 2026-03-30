@@ -2,3 +2,5 @@
 out_test/*
 outputs/* 
 *.pyc
+**.pyc
+qchem_utils/*.pyc

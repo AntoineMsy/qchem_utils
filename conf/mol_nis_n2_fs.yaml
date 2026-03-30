@@ -16,8 +16,8 @@ outdir: outputs/fs/${system.cid}/${ansatz.name}/${sampler_net.name}/${training.n
 system:
   cid: 947 # N2
   basis: "STO-3G"
-  cache_dir: "/leonardo_work/EUHPC_A05_006/Antoine/NeurIS/qchem_utils/pubchem_cache"
-  # cache_dir: '/Users/antoine.misery/Documents/These/projects/importance_sampling/qchem_utils/pubchem_cache'
+  # cache_dir: "/leonardo_work/EUHPC_A05_006/Antoine/NeurIS/qchem_utils/pubchem_cache"
+  cache_dir: '/Users/antoine.misery/Documents/These/projects/importance_sampling/qchem_utils/pubchem_cache'
 exact_sampling: false
 
 training:

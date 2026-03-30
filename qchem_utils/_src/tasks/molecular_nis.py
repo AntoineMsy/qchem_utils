@@ -423,7 +423,7 @@ class MolecularNISRunner:
                         #     plot_every=100,
                         #     exact_energy=exact_per_orb,
                         # ),
-                        IterativeNormalizationCallback(),
+                        IterativeNormalizationCallback(vmc_lr=lr_vmc, nis_lr=lr_nis),
                         # PlotTrainingEnergyCallback(
                         #     out_dir=os.path.join(self.out_dir, "plots"),
                         #     plot_every=100,
