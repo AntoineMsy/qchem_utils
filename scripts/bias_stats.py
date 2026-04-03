@@ -246,62 +246,122 @@ def _prepare_cfg_for_offline(cfg: DictConfig, out_dir: Path) -> DictConfig:
 	return cfg_offline
 
 
-def _qgt_quadratic_form(
-	jac_centered: jax.Array,
-	pdf: jax.Array,
-	vec: jax.Array,
+def _matrix_quadratic_form(matrix: jax.Array, vec: jax.Array) -> jax.Array:
+	v = jnp.asarray(vec)
+	return jnp.real(jnp.vdot(v, matrix @ v))
+
+
+def _compute_bias_terms_from_x(
+	mu_x: jax.Array,
+	x_terms: jax.Array,
+	q_pdf: jax.Array,
+	w_norm: jax.Array,
+	*,
+	n_samples: int,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+	"""
+	Compute bias-only terms from X terms.
+
+	Returns:
+	  bias_signed, bias_abs, raw_rel_bias, scaled_rel_bias, ess_inv
+	"""
+	ess_inv = jnp.sum(q_pdf * (w_norm**2))
+	eqw2_x = jnp.sum(q_pdf * (w_norm**2) * x_terms, axis=1)
+	bias_num = mu_x * ess_inv - eqw2_x
+	bias_signed = bias_num / float(max(int(n_samples), 1))
+	bias_abs = jnp.abs(bias_signed)
+	raw_rel = bias_num / jnp.where(jnp.abs(mu_x) > EPS, mu_x, 1.0)
+	scaled_rel = bias_signed / jnp.where(jnp.abs(mu_x) > EPS, mu_x, 1.0)
+	return bias_signed, bias_abs, raw_rel, scaled_rel, ess_inv
+
+
+def _compute_snr_ess_from_x(
+	mu_x: jax.Array,
+	x_terms: jax.Array,
+	q_pdf: jax.Array,
+	w_norm: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+	"""Compute SNR/ESS-only terms from X terms."""
+	centered_x = x_terms - mu_x[:, None]
+	var = jnp.sum(q_pdf * (w_norm**2) * jnp.abs(centered_x) ** 2, axis=1)
+	snr = jnp.mean(jnp.abs(mu_x) / jnp.sqrt(jnp.maximum(var, EPS)))
+	ess = 1.0 / jnp.sum(q_pdf * (w_norm**2))
+	return snr, ess
+
+
+def _prepare_ol_like_sr_fullsum(
+	jacobian: jax.Array,
+	*,
+	mode: str,
+	pdf_eff: jax.Array,
+	q_pdf: jax.Array,
+	w_norm: jax.Array,
+	embed_power: float,
 ) -> jax.Array:
-	vec_c = jnp.asarray(vec)
-	if not jnp.iscomplexobj(vec_c):
-		vec_c = vec_c.astype(jnp.complex128)
+	"""
+	Prepare O_L exactly in the spirit of sr_srt_common._prepare_input:
+	- center with effective pdf (pdf_eff)
+	- embed sqrt(q) and powers of normalized weights in O_L.
 
-	if jac_centered.ndim == 3:
-		# Complex mode split: (n_states, 2, n_params) -> complex Jacobian rows.
-		jac_c = jnp.asarray(jac_centered[:, 0, :]) + 1j * jnp.asarray(jac_centered[:, 1, :])
+	Centering uses q*w_norm, and factors are embedded as:
+	  factor = sqrt(q) * w_norm**embed_power
+	"""
+	weights_expanded = jnp.expand_dims(pdf_eff, tuple(range(1, jacobian.ndim)))
+	O_L = jacobian - jnp.sum(jacobian * weights_expanded, axis=0, keepdims=True)
+
+	factor = jnp.sqrt(q_pdf) * (w_norm ** embed_power)
+	O_L = O_L * jnp.expand_dims(factor, tuple(range(1, jacobian.ndim)))
+
+	if mode == "complex":
+		# (#ns, 2, np) -> (#ns*2, np)
+		O_L = jax.lax.collapse(O_L, 0, 2)
+	elif mode == "real":
+		pass
 	else:
-		jac_c = jnp.asarray(jac_centered)
-		if not jnp.iscomplexobj(jac_c):
-			jac_c = jac_c.astype(jnp.complex128)
-
-	# b^\dagger S b with S = E[O^\dagger O] is E[|O b|^2].
-	proj = jac_c @ vec_c
-	quad = jnp.sum(pdf * jnp.abs(proj) ** 2)
-	return jnp.real(quad)
+		raise NotImplementedError(f"Unsupported mode: {mode}")
+	return O_L
 
 
-def _complex_jacobian(jac_centered: jax.Array) -> jax.Array:
-	if jac_centered.ndim == 3:
-		return jnp.asarray(jac_centered[:, 0, :]) + 1j * jnp.asarray(jac_centered[:, 1, :])
-	jac_c = jnp.asarray(jac_centered)
-	if not jnp.iscomplexobj(jac_c):
-		jac_c = jac_c.astype(jnp.complex128)
-	return jac_c
+def _compute_x_terms_like_sr_fullsum(
+	jacobian: jax.Array,
+	local_grad: jax.Array,
+	*,
+	mode: str,
+	pdf_eff: jax.Array,
+) -> jax.Array:
+	r"""
+	Compute X terms with SR-like centering and flattening.
 
+	Returns X_terms with shape (n_params, n_states) corresponding to
+	X = 2 Re(\delta \partial_theta log\psi * \delta H_loc).
+	"""
+	weights_expanded = jnp.expand_dims(pdf_eff, tuple(range(1, jacobian.ndim)))
+	O_L = jacobian - jnp.sum(jacobian * weights_expanded, axis=0, keepdims=True)
 
-def _qgt_apply(jac_complex: jax.Array, pdf: jax.Array, vec: jax.Array) -> jax.Array:
-	vec_c = jnp.asarray(vec)
-	if not jnp.iscomplexobj(vec_c):
-		vec_c = vec_c.astype(jnp.complex128)
-	proj = jac_complex @ vec_c
-	return jac_complex.conj().T @ (pdf * proj)
+	de = local_grad.flatten() - jnp.sum(local_grad.flatten() * pdf_eff)
 
+	if mode == "complex":
+		de2 = jnp.stack([jnp.real(de), jnp.imag(de)], axis=-1)
+		dv = jax.lax.collapse(de2, 0, 2)
+		O_L = jax.lax.collapse(O_L, 0, 2)
+		X_terms = O_L.T * dv
+		X_terms = X_terms[:, ::2] + X_terms[:, 1::2]
+	elif mode == "real":
+		X_terms = jnp.real(O_L.T * de[None, :])
+	else:
+		raise NotImplementedError(f"Unsupported mode: {mode}")
 
-def _qgt_matrix(jac_complex: jax.Array, pdf: jax.Array) -> jax.Array:
-	return jac_complex.conj().T @ (pdf[:, None] * jac_complex)
+	return 2.0 * jnp.real(X_terms)
 
 
 def _solve_preconditioned_update(
-	jac_complex: jax.Array,
-	pdf: jax.Array,
+	s_matrix: jax.Array,
 	rhs: jax.Array,
 	diag_shift: float,
 ) -> tuple[jax.Array, Any]:
 	rhs_c = jnp.asarray(rhs)
-	if not jnp.iscomplexobj(rhs_c):
-		rhs_c = rhs_c.astype(jnp.complex128)
-	s_mat = _qgt_matrix(jac_complex, pdf)
-	n_params = s_mat.shape[0]
-	s_shifted = s_mat + diag_shift * jnp.eye(n_params, dtype=s_mat.dtype)
+	n_params = s_matrix.shape[0]
+	s_shifted = s_matrix + diag_shift * jnp.eye(n_params, dtype=s_matrix.dtype)
 
 	sol, info = cholesky(s_shifted, rhs_c)
 	return sol, info
@@ -329,7 +389,6 @@ def _fullsum_bias_metrics(
 
 	h_sparse = hamiltonian.to_sparse()
 	hloc = (h_sparse @ vstate_arr) / vstate_arr
-	hloc_c = hloc - jnp.sum(hloc * pdf)
 
 	mode = getattr(state_p, "mode", "complex")
 	jacobian_orig = nkjax.jacobian(
@@ -343,40 +402,36 @@ def _fullsum_bias_metrics(
 		chunk_size=None,
 	)
 
-	pdf_expand = jnp.expand_dims(pdf, tuple(range(1, jacobian_orig.ndim)))
-	jacobian_centered = jacobian_orig - jnp.sum(jacobian_orig * pdf_expand, axis=0)
-	jac_complex = _complex_jacobian(jacobian_centered)
-
-	if jacobian_centered.ndim == 3:
-		hloc_ri = jnp.stack([jnp.real(hloc_c), jnp.imag(hloc_c)], axis=-1)
-		hloc_flat = jax.lax.collapse(hloc_ri, 0, 2)
-
-		jac_flat = jax.lax.collapse(jacobian_centered, 0, 2)
-		loc_grad_v = jac_flat.T * hloc_flat
-		loc_grad_v = loc_grad_v[:, ::2] + loc_grad_v[:, 1::2]
-		loc_grad_v = jnp.real(loc_grad_v)
-	else:
-		loc_grad_v = jnp.real(jacobian_centered.T * hloc_c[None, :])
-
 	unnorm_pdf_2 = jnp.abs(vstate_arr) ** 2
 	logpsi_q = state_q._apply_fun(state_q.variables, all_states)
 	# In this project, state_q._apply_fun already returns log q.
 	q = jnp.exp(jnp.real(logpsi_q))
 	q = jnp.clip(q, a_min=EPS)
-
 	q_pdf = q / jnp.sum(q)
+
 	w = unnorm_pdf_2 / q
 	w_mean = jnp.sum(q_pdf * w)
-	w_n = w / jnp.maximum(w_mean, EPS)
+	w_norm = w / jnp.maximum(w_mean, EPS)
+	pdf_eff = q_pdf * w_norm
+	X_terms = _compute_x_terms_like_sr_fullsum(
+		jacobian_orig,
+		hloc,
+		mode=mode,
+		pdf_eff=pdf_eff,
+	)
 
-	# Full-sum reference force (exact under p).
-	force_unbiased = jnp.sum(pdf * loc_grad_v, axis=1)
+	# Build SR-like O_L for S (same centering/embedding logic as gradient path).
+	O_L_mu = _prepare_ol_like_sr_fullsum(
+		jacobian_orig,
+		mode=mode,
+		pdf_eff=pdf_eff,
+		q_pdf=q_pdf,
+		w_norm=w_norm,
+		embed_power=0.5,
+	)
 
-	# Formula used:
-	# E[F_hat] ~= mu + (1/Ns) * E_q[w_n^2 (mu - X)], with w_n = w / E_q[w].
-	# Therefore absolute bias vector is b = (1/Ns) * E_q[w_n^2 (mu - X)].
-	mu_x = force_unbiased
-	bias_num = jnp.sum(q_pdf * (w_n**2) * (mu_x[:, None] - loc_grad_v), axis=1)
+	# Full-sum reference force (exact under p through effective weighting in X_terms).
+	force_unbiased = jnp.sum(pdf_eff * X_terms, axis=1)
 
 	ns_state = getattr(state_q, "n_samples", None)
 	ns = n_samples if n_samples is not None else ns_state
@@ -384,42 +439,37 @@ def _fullsum_bias_metrics(
 		ns = 1
 	ns = max(int(ns), 1)
 
-	bias_signed = bias_num / float(ns)
-	bias_abs = jnp.abs(bias_signed)
-
-	rho0_vec = bias_num / jnp.where(jnp.abs(mu_x) > EPS, mu_x, 1.0)
-	rel_bias_vec = bias_signed / jnp.where(jnp.abs(mu_x) > EPS, mu_x, 1.0)
-	centered_loc = loc_grad_v - force_unbiased[:, None]
-
-	v = jnp.sum(q_pdf * (w_n**2) * jnp.abs(centered_loc) ** 2, axis=1)
-	snr = jnp.mean(jnp.abs(force_unbiased) / jnp.sqrt(jnp.maximum(v, EPS)))
-	ess = 1.0 / jnp.sum(q_pdf * (w_n**2))
-
-	bsb = _qgt_quadratic_form(jacobian_centered, pdf, bias_signed)
-	fsf = _qgt_quadratic_form(jacobian_centered, pdf, force_unbiased)
+	bias_signed, bias_abs, rho0_vec, rel_bias_vec, ess_inv = _compute_bias_terms_from_x(
+		force_unbiased,
+		X_terms,
+		q_pdf,
+		w_norm,
+		n_samples=ns,
+	)
+	snr, ess = _compute_snr_ess_from_x(force_unbiased, X_terms, q_pdf, w_norm)
 
 	bias_l2 = jnp.linalg.norm(bias_signed)
 	force_l2 = jnp.linalg.norm(force_unbiased)
 
-	bias_qgt = jnp.sqrt(jnp.maximum(bsb, 0.0))
-	force_qgt = jnp.sqrt(jnp.maximum(fsf, 0.0))
+	# Use the same SR-like preprocessing for S as used to estimate force/update tensors.
+	s_matrix = O_L_mu.T @ O_L_mu
+	bias_qgt = jnp.sqrt(jnp.maximum(_matrix_quadratic_form(s_matrix, bias_signed), 0.0))
+	force_qgt = jnp.sqrt(jnp.maximum(_matrix_quadratic_form(s_matrix, force_unbiased), 0.0))
 
 	# Optimization-impact metrics in preconditioned space: P = S + diag_shift * I.
 	upd_bias, info_bias = _solve_preconditioned_update(
-		jac_complex,
-		pdf,
+		s_matrix,
 		bias_signed,
 		diag_shift=diag_shift,
 	)
 	upd_force, info_force = _solve_preconditioned_update(
-		jac_complex,
-		pdf,
+		s_matrix,
 		force_unbiased,
 		diag_shift=diag_shift,
 	)
 
-	s_upd_bias = _qgt_apply(jac_complex, pdf, upd_bias)
-	s_upd_force = _qgt_apply(jac_complex, pdf, upd_force)
+	s_upd_bias = s_matrix @ upd_bias
+	s_upd_force = s_matrix @ upd_force
 
 	upd_bias_s2 = jnp.real(jnp.vdot(upd_bias, s_upd_bias))
 	upd_force_s2 = jnp.real(jnp.vdot(upd_force, s_upd_force))
@@ -466,8 +516,9 @@ def _fullsum_bias_metrics(
 		"RawRelativeBiasMedian": float(jnp.median(jnp.abs(rho0_vec))),
 		"ScaledRelativeBiasMean": float(jnp.mean(jnp.abs(rel_bias_vec))),
 		"ScaledRelativeBiasMedian": float(jnp.median(jnp.abs(rel_bias_vec))),
-		"BiasQGTQuad": float(bsb),
-		"ForceQGTQuad": float(fsf),
+		"BiasQGTQuad": float(_matrix_quadratic_form(s_matrix, bias_signed)),
+		"ForceQGTQuad": float(_matrix_quadratic_form(s_matrix, force_unbiased)),
+		"EssInverse": float(ess_inv),
 		"DiagShift": float(diag_shift),
 		"UpdateBiasSNorm": float(upd_bias_snorm),
 		"UpdateForceSNorm": float(upd_force_snorm),
