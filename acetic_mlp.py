@@ -60,7 +60,7 @@ from flax import linen as nn
 #     complex = True,)
 vit = MLP(n_layers=2,
         n_features = hi.size,
-        hidden_activation=nn.gelu,
+    hidden_activation="gelu",
         n_out = hi.n_orbitals * hi.n_fermions,
             )
 

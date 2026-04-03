@@ -252,6 +252,7 @@ class MolecularNISRunner:
         """Performs KL Divergence minimization for both Q and P against CISD."""
         if self.cfg.training.get("pretrain", None) is None:
             return
+        self.compute_cisd_target()
         cfg_pretrain = self.cfg.training.pretrain
         log.info("Starting Pre-training (KL Divergence)...")
         n_iter = self.cfg.training.pretrain.iterations
@@ -417,13 +418,14 @@ class MolecularNISRunner:
                             compute_from_psi2=True,
                             compute_every=50,),
                         ESSCallback(compute_every=25),
+                        SaveStatesCallback(save_every=10, out_dir=self.out_dir),
                         # EnergyPerSiteCallback(compute_every=100),
                         # PlotEnergyFromPsiCallback(
                         #     out_dir=os.path.join(self.out_dir, "plots"),
                         #     plot_every=100,
                         #     exact_energy=exact_per_orb,
                         # ),
-                        IterativeNormalizationCallback(vmc_lr=lr_vmc, nis_lr=lr_nis),
+                        # IterativeNormalizationCallback(vmc_lr=lr_vmc, nis_lr=lr_nis),
                         # PlotTrainingEnergyCallback(
                         #     out_dir=os.path.join(self.out_dir, "plots"),
                         #     plot_every=100,

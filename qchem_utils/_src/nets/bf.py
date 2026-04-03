@@ -17,17 +17,32 @@ class MLP(nn.Module):
     n_features: int
     n_out: int
     param_dtype: DType = float
-    hidden_activation: nn.activation = nn.gelu
-    out_activation: nn.activation = nn.tanh
+    hidden_activation: str = "gelu"
+    out_activation: str = "tanh"
     kernel_init: Any = default_kernel_init
+
+    def _activation_fn(self, name: str):
+        if name == "gelu":
+            return nn.gelu
+        if name == "tanh":
+            return nn.tanh
+        if name == "relu":
+            return nn.relu
+        if name == "identity":
+            return lambda x: x
+        raise ValueError(
+            f"Unsupported activation '{name}'. Supported: gelu, tanh, relu, identity."
+        )
 
     @nn.compact
     def __call__(self, x):
+        hidden_act = self._activation_fn(self.hidden_activation)
+        out_act = self._activation_fn(self.out_activation)
         for _ in range(self.n_layers):
             x = nn.Dense(self.n_features, param_dtype=self.param_dtype, kernel_init=self.kernel_init)(x)
-            x = self.hidden_activation(x)
+            x = hidden_act(x)
         x = nn.Dense(self.n_out, param_dtype=self.param_dtype, kernel_init=self.kernel_init)(x)
-        x = self.out_activation(x)
+        x = out_act(x)
         return x
     
 
@@ -133,7 +148,7 @@ class LogNeuralBackflow(nn.Module):
         # The N x Nf matrix of the orbitals
         self.backflow = Backflow_noMF(model = MLP(n_layers=self.n_layers,
                                                 n_features = self.hidden_units,
-                                                hidden_activation= nn.gelu,
+                                                hidden_activation="gelu",
                                                 n_out = self.hilbert.n_orbitals * self.hilbert.n_fermions,
                                                     ),
                                     hilbert = self.hilbert,

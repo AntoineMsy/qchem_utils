@@ -3,7 +3,7 @@ defaults:
   - _self_
   - task: molecular_nis
   - sampler_net: rbm
-  - ansatz: vit
+  - ansatz: mlp
   
 hydra:
   run:
@@ -12,10 +12,10 @@ hydra:
 outdir: outputs/${system.cid}/${ansatz.name}/${sampler_net.name}/${training.n_s}/${now:%Y-%m-%d_%H-%M}
 
 system:
-  cid: 947 # N2
+  cid: 62714 # N2
   basis: "STO-3G"
-  cache_dir: "/leonardo_work/EUHPC_A05_006/Antoine/NeurIS/qchem_utils/pubchem_cache"
-  # cache_dir: '/Users/antoine.misery/Documents/These/projects/importance_sampling/qchem_utils/pubchem_cache'
+  # cache_dir: "/leonardo_work/EUHPC_A05_006/Antoine/NeurIS/qchem_utils/pubchem_cache"
+  cache_dir: '/Users/antoine.misery/Documents/These/projects/importance_sampling/qchem_utils/pubchem_cache'
 exact_sampling: false
 
 training:
@@ -38,7 +38,7 @@ training:
   
   nis:
     iterations: 1
-    update_fn: 'snr_mat'
+    update_fn: 'snr_mat_sr'
     lr_start: 1e-2
     lr_end: 7e-3
     diag_shift: 1e-5
