@@ -607,9 +607,8 @@ def _plot_summary(rows: list[dict[str, Any]], cfg: DictConfig, out_path: Path, d
 	rel_e = np.array([max(float(r["rel_energy"]), EPS) for r in rows_sorted], dtype=float)
 	bias_force_qgt = np.array([float(r["BiasToForceQGT"]) for r in rows_sorted], dtype=float)
 	upd_ratio_s = np.array([float(r["UpdateBiasToForceS"]) for r in rows_sorted], dtype=float)
+	upd_ratio_l2 = np.array([float(r["UpdateBiasToForceL2"]) for r in rows_sorted], dtype=float)
 	energy_proxy = np.array([float(r["EnergyImpactProxy"]) for r in rows_sorted], dtype=float)
-	raw_rel_bias = np.array([float(r["RawRelativeBiasMean"]) for r in rows_sorted], dtype=float)
-	scaled_rel_bias = np.array([float(r["ScaledRelativeBiasMean"]) for r in rows_sorted], dtype=float)
 
 	fig, axs = plt.subplots(2, 2, figsize=(12, 8), constrained_layout=True)
 	fig.suptitle(_make_plot_title(cfg, diag_shift), fontsize=12)
@@ -644,13 +643,13 @@ def _plot_summary(rows: list[dict[str, Any]], cfg: DictConfig, out_path: Path, d
 	cbar = fig.colorbar(sc, ax=ax)
 	cbar.set_label("log10(relative energy)")
 
-	# Panel 3: raw vs scaled relative bias summary.
+	# Panel 3: preconditioned-vs-raw update ratio comparison.
 	ax = axs[1, 0]
-	ax.plot(steps, np.maximum(raw_rel_bias, EPS), "o-", label="RawRelativeBiasMean")
-	ax.plot(steps, np.maximum(scaled_rel_bias, EPS), "s-", label="ScaledRelativeBiasMean")
+	ax.plot(steps, np.maximum(upd_ratio_l2, EPS), "o-", label="UpdateBiasToForceL2")
+	ax.plot(steps, np.maximum(upd_ratio_s, EPS), "s-", label="UpdateBiasToForceS")
 	ax.set_yscale("log")
 	ax.set_xlabel("Optimization step")
-	ax.set_ylabel("Relative bias summary")
+	ax.set_ylabel("Update ratio")
 	ax.grid(True, which="both", alpha=0.3)
 	ax.legend(fontsize=8)
 
