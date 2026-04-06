@@ -23,7 +23,7 @@ import nqxpack
 from omegaconf import DictConfig, OmegaConf
 from netket.optimizer.solver import cholesky
 
-from qchem_utils.tasks import MolecularNISRunner
+from qchem_utils.tasks import HubbardNISRunner, MolecularNISRunner
 
 
 EPS = 1e-18
@@ -49,33 +49,46 @@ def _parse_levels(text: str) -> list[float]:
 
 
 def _find_config_path(out_dir: Path) -> Path:
-	candidates = [
-		out_dir / ".hydra" / "config.yaml",
-		out_dir / "config.yaml",
-	]
-	for candidate in candidates:
-		if candidate.is_file():
-			return candidate
+	current = out_dir
+	while True:
+		candidates = [
+			current / ".hydra" / "config.yaml",
+			current / "config.yaml",
+		]
+		for candidate in candidates:
+			if candidate.is_file():
+				return candidate
+		if current.parent == current:
+			break
+		current = current.parent
+
 	raise FileNotFoundError(
 		"Could not find run config. Expected one of: "
-		f"{candidates[0]} or {candidates[1]}"
+		f"{out_dir}/.hydra/config.yaml or {out_dir}/config.yaml "
+		"(or in a parent directory)"
 	)
 
 
 def _find_log_path(out_dir: Path) -> Path | None:
-	candidates = [
-		out_dir / "vmc_run.log.log",
-		out_dir / "vmc_run.log",
-		out_dir / "vmc_run",
-	]
-	for candidate in candidates:
-		if candidate.is_file():
-			return candidate
+	current = out_dir
+	while True:
+		candidates = [
+			current / "vmc_run.log.log",
+			current / "vmc_run.log",
+			current / "vmc_run",
+		]
+		for candidate in candidates:
+			if candidate.is_file():
+				return candidate
 
-	wildcard = sorted(out_dir.glob("vmc_run*"))
-	for path in wildcard:
-		if path.is_file():
-			return path
+		wildcard = sorted(current.glob("vmc_run*"))
+		for path in wildcard:
+			if path.is_file():
+				return path
+
+		if current.parent == current:
+			break
+		current = current.parent
 	return None
 
 
@@ -99,6 +112,22 @@ def _collect_checkpoints(out_dir: Path) -> list[CheckpointPair]:
 			*out_dir.glob("state_q_step*.nk"),
 		]
 	)
+
+	# Hubbard runs often save checkpoints in a nested subfolder (e.g. checkpoints/).
+	if not p_files:
+		p_files = sorted(
+			[
+				*out_dir.rglob("state_p_step*.mpack"),
+				*out_dir.rglob("state_p_step*.nk"),
+			]
+		)
+	if not q_files:
+		q_files = sorted(
+			[
+				*out_dir.rglob("state_q_step*.mpack"),
+				*out_dir.rglob("state_q_step*.nk"),
+			]
+		)
 
 	p_by_step: dict[int, Path] = {}
 	q_by_step: dict[int, Path] = {}
@@ -231,7 +260,27 @@ def _select_steps_by_levels(
 
 
 def _rebuild_hamiltonian(cfg: DictConfig) -> Any:
-	runner = MolecularNISRunner(cfg)
+	task_cfg = cfg.get("task", {}) if isinstance(cfg, DictConfig) else {}
+	target = str(task_cfg.get("_target_", ""))
+
+	if "HubbardNISRunner" in target:
+		runner_cls = HubbardNISRunner
+	elif "MolecularNISRunner" in target:
+		runner_cls = MolecularNISRunner
+	else:
+		# Fallback for configs without explicit task target.
+		system_cfg = cfg.get("system", {})
+		if "cid" in system_cfg:
+			runner_cls = MolecularNISRunner
+		elif all(k in system_cfg for k in ("Lx", "Ly", "U", "t")):
+			runner_cls = HubbardNISRunner
+		else:
+			raise RuntimeError(
+				"Could not infer runner from config. Expected task._target_ to contain "
+				"MolecularNISRunner or HubbardNISRunner."
+			)
+
+	runner = runner_cls(cfg)
 	runner.setup_system()
 	return runner.hamiltonian
 
@@ -585,12 +634,20 @@ def _save_csv(rows: list[dict[str, Any]], out_path: Path) -> None:
 
 def _make_plot_title(cfg: DictConfig, diag_shift: float) -> str:
 	system_cfg = cfg.get("system", {})
-	cid = system_cfg.get("cid", "unknown")
-	basis = system_cfg.get("basis", "")
+	if "cid" in system_cfg:
+		system_label = f"system {system_cfg.get('cid', 'unknown')} ({system_cfg.get('basis', '')})"
+	else:
+		lx = system_cfg.get("Lx", "?")
+		ly = system_cfg.get("Ly", "?")
+		u = system_cfg.get("U", "?")
+		t = system_cfg.get("t", "?")
+		graph = system_cfg.get("graph", "?")
+		system_label = f"hubbard {graph} L={lx}x{ly}, U/t={u}/{t}"
+
 	ansatz = cfg.get("ansatz", {}).get("name", "?")
 	sampler = cfg.get("sampler_net", {}).get("name", "?")
 	return (
-		f"Bias impact summary - system {cid} ({basis}) | {ansatz}/{sampler} | "
+		f"Bias impact summary - {system_label} | {ansatz}/{sampler} | "
 		f"diag_shift={diag_shift:.1e}"
 	)
 
@@ -679,7 +736,14 @@ def main() -> None:
 			"and computes FullSum-style bias diagnostics plus QGT norm comparisons."
 		)
 	)
-	parser.add_argument("out_dir", type=Path, help="Run output directory containing checkpoints")
+	parser.add_argument(
+		"out_dir",
+		type=Path,
+		help=(
+			"Run output directory or checkpoint directory containing state_p/state_q files "
+			"(config/log can be discovered in parent directories)"
+		),
+	)
 	parser.add_argument(
 		"--levels",
 		type=str,
